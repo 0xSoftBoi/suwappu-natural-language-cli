@@ -1,0 +1,1 @@
+{"name":"suwappu-natural-language-cli","version":"1.0.0","type":"module","scripts":{"start":"npx tsx cli.ts"},"dependencies":{"tsx":"^4.0.0"},"license":"MIT"}

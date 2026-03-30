@@ -59,6 +59,12 @@ python cli.py
 | `quit` | Exit |
 | `Ctrl+C` | Cancel running task |
 
+## Development
+
+```bash
+bun test && bun run check
+```
+
 ## Links
 
 - [Suwappu Docs](https://docs.suwappu.bot) | [A2A Protocol](https://docs.suwappu.bot/protocols/a2a)

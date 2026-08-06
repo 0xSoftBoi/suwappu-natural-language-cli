@@ -1,209 +1,255 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env bun
 /**
- * Suwappu Natural Language Trade CLI — TypeScript
- * Interactive REPL for communicating with Suwappu via the A2A protocol.
+ * Suwappu natural-language A2A CLI.
+ *
+ * Current A2A "swap" / "quote" language returns a quote. The hosted A2A route
+ * has no execution method today; this client never signs or broadcasts trades.
  */
 
-import * as readline from "readline";
+import * as readline from "node:readline";
+import {
+  A2aClient,
+  formatArtifacts,
+  isTerminalState,
+  type A2aTask,
+} from "./a2a.js";
 
-const A2A_URL = "https://api.suwappu.bot/a2a";
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const DEFAULT_POLL_TIMEOUT_MS = 120_000;
 
-let requestId = 0;
-const taskHistory: Array<{ id: string; state: string; timestamp: string }> = [];
+interface HistoryEntry {
+  id: string;
+  state: string;
+  timestamp: string;
+}
+
+const taskHistory: HistoryEntry[] = [];
 let currentTaskId: string | null = null;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-function nextId(): number {
-  return ++requestId;
+function pollTimeoutMs(): number {
+  const parsed = Number(
+    process.env.SUWAPPU_A2A_POLL_TIMEOUT_MS ?? DEFAULT_POLL_TIMEOUT_MS,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_POLL_TIMEOUT_MS;
 }
 
-async function a2aRequest(apiKey: string, method: string, params: Record<string, unknown>) {
-  const response = await fetch(A2A_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: nextId(),
-      method,
-      params,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+function renderTask(task: A2aTask): void {
+  const state = task.status.state;
+  if (state === "completed") {
+    const output = formatArtifacts(task.artifacts);
+    console.log(output || task.status.message || "Done.");
+    return;
   }
 
-  const data = await response.json();
-  if (data.error) {
-    throw new Error(`A2A error ${data.error.code}: ${data.error.message}`);
+  if (state === "failed" || state === "canceled") {
+    console.log(`Task ${state}: ${task.status.message ?? state}`);
   }
-  return data.result;
 }
 
-async function sendMessage(apiKey: string, text: string) {
-  return a2aRequest(apiKey, "message/send", {
-    message: {
-      role: "user",
-      parts: [{ type: "text", text }],
-    },
+function updateHistory(task: A2aTask): void {
+  const existing = taskHistory.find((entry) => entry.id === task.id);
+  if (existing) {
+    existing.state = task.status.state;
+    existing.timestamp = task.status.timestamp ?? existing.timestamp;
+    return;
+  }
+
+  taskHistory.push({
+    id: task.id,
+    state: task.status.state,
+    timestamp: task.status.timestamp ?? "",
   });
 }
 
-async function getTask(apiKey: string, taskId: string) {
-  return a2aRequest(apiKey, "tasks/get", { taskId });
-}
-
-async function cancelTask(apiKey: string, taskId: string) {
-  return a2aRequest(apiKey, "tasks/cancel", { taskId });
-}
-
-function formatArtifacts(artifacts: Array<{ parts: Array<{ type: string; text?: string; data?: unknown }> }>): string {
-  const output: string[] = [];
-  for (const artifact of artifacts) {
-    for (const part of artifact.parts ?? []) {
-      if (part.type === "text" && part.text) {
-        output.push(part.text);
-      } else if (part.type === "data" && part.data) {
-        output.push(JSON.stringify(part.data, null, 2));
-      }
-    }
-  }
-  return output.join("\n");
-}
-
-async function pollTask(apiKey: string, taskId: string) {
+async function pollTask(client: A2aClient, taskId: string): Promise<A2aTask> {
   currentTaskId = taskId;
+  const deadline = Date.now() + pollTimeoutMs();
   let frame = 0;
 
   try {
-    while (true) {
-      const result = await getTask(apiKey, taskId);
-      const task = result.task;
-      const state = task.status.state;
+    while (Date.now() < deadline) {
+      const { task } = await client.getTask(taskId);
+      updateHistory(task);
 
-      if (state === "completed") {
-        process.stdout.write("\r" + " ".repeat(40) + "\r");
-        if (task.artifacts?.length) {
-          console.log(formatArtifacts(task.artifacts));
-        } else {
-          console.log(task.status.message ?? "Done.");
-        }
+      if (isTerminalState(task.status.state)) {
+        process.stdout.write("\r" + " ".repeat(48) + "\r");
+        renderTask(task);
         return task;
       }
 
-      if (state === "failed" || state === "canceled") {
-        process.stdout.write("\r" + " ".repeat(40) + "\r");
-        console.log(`Task ${state}: ${task.status.message ?? state}`);
-        return task;
-      }
-
-      process.stdout.write(`\r  ${SPINNER[frame % SPINNER.length]} Processing...`);
+      process.stdout.write(
+        `\r  ${SPINNER[frame % SPINNER.length]} A2A task ${task.status.state}...`,
+      );
       frame++;
       await sleep(1000);
     }
   } finally {
     currentTaskId = null;
   }
+
+  throw new Error(
+    `A2A task ${taskId} did not finish within ${pollTimeoutMs()}ms; use the task id to inspect it later`,
+  );
 }
 
-function handleResponse(apiKey: string, result: { task: any }) {
-  const task = result.task;
-  const state = task.status.state;
+async function handleResponse(
+  client: A2aClient,
+  task: A2aTask,
+): Promise<void> {
+  updateHistory(task);
 
-  taskHistory.push({
-    id: task.id,
-    state,
-    timestamp: task.status.timestamp ?? "",
-  });
-
-  if (state === "completed") {
-    if (task.artifacts?.length) {
-      console.log(formatArtifacts(task.artifacts));
-    } else {
-      console.log(task.status.message ?? "Done.");
-    }
-    return Promise.resolve();
-  }
-
-  if (state === "submitted" || state === "working") {
-    return pollTask(apiKey, task.id);
-  }
-
-  if (state === "failed") {
-    console.log(`Failed: ${task.status.message ?? "Unknown error"}`);
-  } else {
-    console.log(`Unexpected state: ${state}`);
-  }
-
-  return Promise.resolve();
-}
-
-function printHistory() {
-  if (taskHistory.length === 0) {
-    console.log("No task history yet.");
+  if (isTerminalState(task.status.state)) {
+    renderTask(task);
     return;
   }
 
-  console.log(`\n  ${"#".padEnd(4)} ${"Task ID".padEnd(40)} ${"State".padEnd(12)} Time`);
-  console.log(`  ${"-".repeat(70)}`);
-  taskHistory.forEach((entry, i) => {
+  if (task.status.state === "submitted" || task.status.state === "working") {
+    await pollTask(client, task.id);
+    return;
+  }
+
+  console.log(`Unexpected task state: ${task.status.state}`);
+}
+
+function printHistory(): void {
+  if (!taskHistory.length) {
+    console.log("No local A2A task history yet.");
+    return;
+  }
+
+  console.log(
+    `\n  ${"#".padEnd(4)} ${"Task ID".padEnd(40)} ${"State".padEnd(12)} Time`,
+  );
+  console.log(`  ${"-".repeat(74)}`);
+  taskHistory.forEach((entry, index) => {
     console.log(
-      `  ${String(i + 1).padEnd(4)} ${entry.id.padEnd(40)} ${entry.state.padEnd(12)} ${entry.timestamp}`
+      `  ${String(index + 1).padEnd(4)} ${entry.id.padEnd(40)} ${entry.state.padEnd(12)} ${entry.timestamp}`,
     );
   });
   console.log();
 }
 
-function printHelp() {
+function printHelp(): void {
   console.log(`
-  Suwappu Natural Language CLI
-  ────────────────────────────
-  Type any natural language command. Examples:
+  Suwappu Natural-Language A2A CLI
+  ───────────────────────────────
+  A2A 0.3 natural-language examples:
 
-    swap 0.5 ETH to USDC on base
-    price of ETH
-    prices for ETH, BTC, SOL
-    show my portfolio on ethereum
-    list supported chains
-    quote 100 USDC to WBTC
+    swap 0.5 ETH to USDC on base    # quote only; no execution
+    quote 100 USDC to WBTC on base  # quote only
+    price ETH SOL BTC
+    chains
+    tokens on solana
+    balance 0x...                    # returns a portfolio integration hint
 
-  Special commands:
-    help      Show this help message
-    history   Show task history
-    quit      Exit the CLI
+  Local commands:
+    card      Inspect Suwappu's public Agent Card
+    history   Show local A2A task history (not swap history)
+    help      Show this help
+    quit      Exit
 
-  Press Ctrl+C during a running task to cancel it.
+  Actual portfolio reads are available via MCP get_portfolio or the agent REST API.
+  This CLI never signs, broadcasts, or submits managed swap execution.
 `);
 }
 
-async function main() {
-  const apiKey = process.env.SUWAPPU_API_KEY;
-  if (!apiKey) {
-    console.error("Error: Set SUWAPPU_API_KEY environment variable.");
-    process.exit(1);
+function printUsage(): void {
+  console.log(`Usage:
+  bun run src/cli.ts
+  bun run src/cli.ts --once "price ETH"
+  bun run src/cli.ts --card
+
+Environment:
+  SUWAPPU_API_KEY              Required for A2A message/task methods
+  SUWAPPU_A2A_URL              Optional A2A endpoint override
+  SUWAPPU_AGENT_CARD_URL       Optional Agent Card override
+  SUWAPPU_A2A_POLL_TIMEOUT_MS  Optional task polling timeout
+`);
+}
+
+function renderCardSummary(card: Record<string, unknown>): void {
+  const protocols = Array.isArray(card.protocolVersions)
+    ? card.protocolVersions.join(", ")
+    : "unknown";
+  const skills = Array.isArray(card.skills) ? card.skills : [];
+  const interfaces = Array.isArray(card.interfaces) ? card.interfaces : [];
+
+  console.log(
+    `${String(card.name ?? "Suwappu")} Agent Card v${String(
+      card.version ?? "unknown",
+    )}`,
+  );
+  console.log(`  A2A protocol: ${protocols}`);
+  console.log(`  Interfaces: ${interfaces.length}`);
+  console.log(`  Skills: ${skills.length}`);
+  for (const skill of skills) {
+    if (!skill || typeof skill !== "object" || Array.isArray(skill)) continue;
+    const entry = skill as Record<string, unknown>;
+    console.log(
+      `    - ${String(entry.id ?? entry.name ?? "unknown")}: ${String(
+        entry.description ?? "",
+      )}`,
+    );
+  }
+}
+
+async function runOnce(client: A2aClient, text: string): Promise<void> {
+  if (!text.trim()) throw new Error("--once requires a natural-language message");
+  const { task } = await client.sendMessage(text.trim());
+  await handleResponse(client, task);
+  console.error(`A2A task: ${task.id}`);
+}
+
+async function main(): Promise<void> {
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+    printUsage();
+    return;
   }
 
-  // Handle Ctrl+C for task cancellation
+  const apiKey = process.env.SUWAPPU_API_KEY ?? "";
+  const client = new A2aClient(apiKey);
+
+  if (rawArgs.includes("--card")) {
+    renderCardSummary(await client.getAgentCard());
+    return;
+  }
+
+  if (!apiKey) {
+    throw new Error(
+      "SUWAPPU_API_KEY is required for A2A messages; --card works anonymously",
+    );
+  }
+
+  const onceIndex = rawArgs.indexOf("--once");
+  if (onceIndex >= 0) {
+    await runOnce(client, rawArgs.slice(onceIndex + 1).join(" "));
+    return;
+  }
+
+  let busy = false;
   process.on("SIGINT", async () => {
     if (currentTaskId) {
-      process.stdout.write("\r" + " ".repeat(40) + "\r");
-      console.log("Canceling task...");
+      const taskId = currentTaskId;
+      process.stdout.write("\r" + " ".repeat(48) + "\r");
+      console.log(`Canceling A2A task ${taskId}...`);
       try {
-        await cancelTask(apiKey, currentTaskId);
-        console.log("Task canceled.");
-      } catch (e) {
-        console.error(`Cancel failed: ${e}`);
+        const { task } = await client.cancelTask(taskId);
+        updateHistory(task);
+        console.log(`Task is now ${task.status.state}.`);
+      } catch (error) {
+        console.error(
+          `Cancel failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       currentTaskId = null;
-    } else {
-      console.log("\nGoodbye!");
-      process.exit(0);
+      return;
     }
+
+    console.log("\nGoodbye!");
+    process.exit(0);
   });
 
   const rl = readline.createInterface({
@@ -222,11 +268,16 @@ async function main() {
       return;
     }
 
+    if (busy) {
+      console.log("A task is already being handled; wait for it or press Ctrl+C.");
+      rl.prompt();
+      return;
+    }
+
     const lower = input.toLowerCase();
     if (lower === "quit" || lower === "exit") {
-      console.log("Goodbye!");
       rl.close();
-      process.exit(0);
+      return;
     }
     if (lower === "help") {
       printHelp();
@@ -238,27 +289,44 @@ async function main() {
       rl.prompt();
       return;
     }
+    if (lower === "card") {
+      try {
+        renderCardSummary(await client.getAgentCard());
+      } catch (error) {
+        console.error(
+          `Error: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      rl.prompt();
+      return;
+    }
 
+    busy = true;
+    rl.pause();
     try {
-      const result = await sendMessage(apiKey, input);
-      await handleResponse(apiKey, result);
-    } catch (error: unknown) {
+      const { task } = await client.sendMessage(input);
+      await handleResponse(client, task);
+    } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (message.includes("429")) {
         console.log("Rate limited. Wait a moment and try again.");
       } else {
         console.error(`Error: ${message}`);
       }
+    } finally {
+      busy = false;
+      console.log();
+      rl.resume();
+      rl.prompt();
     }
-
-    console.log();
-    rl.prompt();
   });
 
   rl.on("close", () => {
     console.log("\nGoodbye!");
-    process.exit(0);
   });
 }
 
-main().catch(console.error);
+main().catch((error: unknown) => {
+  console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+});

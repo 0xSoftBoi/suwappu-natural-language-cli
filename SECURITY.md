@@ -1,9 +1,13 @@
 # Security Policy
 
-This repository is a satellite / example application built on the
-[Suwappu API](https://github.com/0xSoftBoi/suwappubot). Some examples can
-initiate real financial transactions when execution is enabled. Treat API keys,
-wallet credentials, and configuration as sensitive.
+This repository is a satellite/example client for the
+[Suwappu API](https://github.com/0xSoftBoi/suwappubot). It demonstrates the
+hosted A2A natural-language route.
+
+The current A2A route is quote/discovery-oriented and has no swap execution
+method. This CLI contains no transaction signing, broadcasting, or managed
+execution path. Its Suwappu API key is still sensitive because the same
+credential can authorize other agent API capabilities outside this example.
 
 ## Reporting a vulnerability
 
@@ -15,18 +19,23 @@ wallet credentials, and configuration as sensitive.
 Please include the affected file, version or commit, reproduction steps, and an
 impact assessment.
 
-**Scope note:** issues in this repository's own code, SDK usage, dependencies,
-or CI belong here. Vulnerabilities in the Suwappu API, core bot, smart
-contracts, custody/key-management layer, or shared SDK should be reported
+**Scope note:** issues in this repository's A2A client, request handling,
+dependencies, or CI belong here. Vulnerabilities in the Suwappu API, core bot,
+smart contracts, custody/key-management layer, or shared SDK should be reported
 upstream through the
 [core security policy](https://github.com/0xSoftBoi/suwappubot/security/policy).
 
-## Custody and execution model
+## Capability boundary
 
-Suwappu supports both self-custody and custodial product flows. This satellite
-repository does not make a custody guarantee: behavior depends on the API mode
-and configuration in use. Prefer dry-run or read-only modes where available,
-use test wallets before enabling execution, and never commit credentials.
+Natural-language `swap ...` currently returns a quote. Do not interpret that
+word as approval to prepare, sign, broadcast, or submit a transaction.
+
+MCP unsigned transaction preparation and the agent REST managed-execution path
+are separate capabilities with separate security decisions. If this example is
+extended to use either one, require an explicit local capability policy and
+update its user-facing warnings before enabling it.
+
+Use test credentials during development and never commit API keys.
 
 ## Our commitment
 

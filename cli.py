@@ -204,14 +204,14 @@ def render_task(task: dict[str, Any]) -> None:
 
 def poll_timeout_seconds() -> float:
     raw = os.environ.get(
-        "SUWAPPU_A2A_POLL_TIMEOUT_SECONDS",
-        str(DEFAULT_POLL_TIMEOUT_SECONDS),
+        "SUWAPPU_A2A_POLL_TIMEOUT_MS",
+        str(DEFAULT_POLL_TIMEOUT_SECONDS * 1000),
     )
     try:
-        value = float(raw)
+        value_ms = float(raw)
     except ValueError:
         return DEFAULT_POLL_TIMEOUT_SECONDS
-    return value if value > 0 else DEFAULT_POLL_TIMEOUT_SECONDS
+    return value_ms / 1000 if value_ms > 0 else DEFAULT_POLL_TIMEOUT_SECONDS
 
 
 def poll_task(client: A2aClient, task_id: str) -> dict[str, Any]:

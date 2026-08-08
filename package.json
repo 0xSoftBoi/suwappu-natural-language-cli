@@ -1,7 +1,7 @@
 {
   "name": "suwappu-natural-language-cli",
-  "version": "1.1.0",
-  "description": "Natural-language A2A 0.3 quote and discovery CLI for Suwappu",
+  "version": "2.0.0",
+  "description": "Operations-ready, read-only A2A 0.3 quote and discovery CLI for Suwappu",
   "type": "module",
   "bin": {
     "suwappu-nl": "src/cli.ts"
@@ -9,12 +9,17 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "mkdir -p dist && bun build src/cli.ts --compile --outfile dist/suwappu-nl",
+    "verify": "bun run check && bun test && bun run build && npm audit --audit-level=high"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "typescript": "^5.0.0"
   },
-  "packageManager": "bun@1.3.14",
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "packageManager": "npm@11.9.0",
   "license": "MIT"
 }

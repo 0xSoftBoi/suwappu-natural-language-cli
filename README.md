@@ -36,7 +36,7 @@ Do not treat A2A “swap,” MCP `execute_swap`, and managed REST execution as a
 TypeScript/Bun:
 
 ```bash
-bun install
+npm ci
 bun run check
 bun test
 ```
@@ -80,6 +80,7 @@ Optional overrides:
 export SUWAPPU_A2A_URL=https://api.suwappu.bot/a2a
 export SUWAPPU_AGENT_CARD_URL=https://api.suwappu.bot/.well-known/agent.json
 export SUWAPPU_A2A_POLL_TIMEOUT_MS=120000
+export SUWAPPU_OPERATION_TIMEOUT_MS=25000
 ```
 
 See `.env.example`.
@@ -162,6 +163,24 @@ The Suwappu server currently accepts legacy `taskId` too, but new integrations s
 - Bound polling and keep cancellation explicit.
 - Discover the Agent Card, but still design your application around the capabilities it intentionally allows.
 - If your product needs execution, make that a separate, explicit integration decision rather than inferring it from natural-language “swap.”
+
+## Production boundary
+
+The v2 contract treats this as a **read-only conversational front door**, not an execution agent. Suwappu request deadlines are bounded to 30 seconds, non-2xx HTTP errors do not echo upstream bodies into operator logs, and the supplied image runs as an unprivileged user.
+
+Use one API key per environment, put an external request-rate/concurrency budget around multi-tenant use, and retain A2A task IDs as opaque reconciliation handles rather than inventing a new trade retry loop. A timed-out `message/send` has an unknown request outcome: inspect the task/server state before issuing a semantically identical request.
+
+For health signals, incident order, container operation, and the release gate, see [docs/OPERATIONS.md](docs/OPERATIONS.md). For a concrete product ladder and unit-economics model, see [BUILDING_A_PRODUCT.md](BUILDING_A_PRODUCT.md).
+
+## Develop and release
+
+```bash
+npm ci
+bun run verify
+python -m py_compile cli.py
+```
+
+CI also builds the non-root image and runs CodeQL. See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Links
 

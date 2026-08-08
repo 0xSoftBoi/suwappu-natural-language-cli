@@ -5,6 +5,7 @@ import {
   formatArtifacts,
   isSpecialCommand,
   isTerminalState,
+  requestTimeoutMs,
   taskIdParams,
 } from "../src/a2a.js";
 
@@ -73,5 +74,16 @@ describe("local commands", () => {
     expect(isSpecialCommand("Help")).toBe(true);
     expect(isSpecialCommand("history")).toBe(true);
     expect(isSpecialCommand("swap 0.5 ETH to USDC")).toBe(false);
+  });
+});
+
+describe("operation deadline", () => {
+  it("uses a bounded configurable request timeout", () => {
+    expect(requestTimeoutMs(undefined)).toBe(25_000);
+    expect(requestTimeoutMs("100")).toBe(100);
+    expect(requestTimeoutMs("30000")).toBe(30_000);
+    expect(() => requestTimeoutMs("99")).toThrow("100 to 30000");
+    expect(() => requestTimeoutMs("30001")).toThrow("100 to 30000");
+    expect(() => requestTimeoutMs("nope")).toThrow("100 to 30000");
   });
 });
